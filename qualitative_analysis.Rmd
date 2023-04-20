@@ -1,0 +1,305 @@
+---
+title: "qualitative_analysis"
+author: "Francesca Tinsdeall"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(readr)
+library(tidyverse)
+library(dplyr)
+library(purrr)
+library(stringr)
+library(janitor)
+library(ggplot2)
+library(meta)
+library(metafor)
+library(dmetar)
+library(gridExtra)
+library(reshape2)
+library(robvis)
+
+```
+
+# Read in correct data 
+
+```{r}
+SMD.g <- read.csv('meta.csv')
+```
+
+
+# Risk of Bias assessment 
+
+## Get n of studies falling into low, high or unclear RoB categories for each Risk of Bias assessment question
+
+```{r - rob numbers}
+
+rob <- SMD.g %>% select(study_id_str, ro_b_assessment_blinding_of_animal_carers_handlers, ro_b_assessment_a_priori_power_calculations, ro_b_assessment_blinding_of_outcome_assessors, ro_b_assessment_allocation_concealment, ro_b_assessment_random_housing, ro_b_assessment_baseline_characteristics, ro_b_assessment_incomplete_outcome_data, ro_b_assessment_random_outcome_assessment, ro_b_assessment_unit_of_analysis_error, ro_b_assessment_presence_of_sequence_generation) %>% 
+  distinct() %>% 
+  select(-study_id_str)
+
+rob.count <- apply(rob, 2 , table)
+rob.count
+```
+
+### Results 
+Blinding of animal handlers: High = 1, Low = 2, Unclear = 45
+Blinding of outcome assessors: High = 1, Low = 8, Unclear = 39
+Allocation concealment: High = 1, Low = 2, Unclear = 45
+
+A priori power calculations: High = 0, Low = 1, Unclear = 47
+Unit of analysis error: High = 26, Low = 21, Unclear = 1
+Incomplete outcome data: High = 12, Low = 21, Unclear = 15
+
+Presence of random sequence generation: High = 0, Low = 20, Unclear = 28
+Baseline characteristics: High = 0, Low = 6, Unclear = 42
+Random housing: High = 1, Low = 1, Unclear = 46
+Random outcome assessment: High = 0, Low = 13, Unclear = 35
+
+## Make % studies plot for RoB assessment 
+```{r - rob plot}
+
+rob$rob_category <- row.names(rob)
+rob_plot <- melt(rob, id.vars = "rob_category") %>% 
+  rename("Risk" = "value")
+  
+rob_plot$variable <- fct_recode(rob_plot$variable, 
+                       "Blinding of animal handlers/carers" = "ro_b_assessment_blinding_of_animal_carers_handlers", 
+                       'A priori power calculations' = 'ro_b_assessment_a_priori_power_calculations', 
+             "Random sequence generation" = "ro_b_assessment_presence_of_sequence_generation",
+             "Allocation concealment" = 'ro_b_assessment_allocation_concealment', 
+             "Blinding of outcome assessors" = 'ro_b_assessment_blinding_of_outcome_assessors', 
+             "Random housing" = "ro_b_assessment_random_housing", 
+             "Baseline characteristics" = "ro_b_assessment_baseline_characteristics", 
+             "Random outcome assessment" = "ro_b_assessment_random_outcome_assessment", 
+             "Incomplete outcome data" =  "ro_b_assessment_incomplete_outcome_data", 
+             "Unit of analysis error" = 'ro_b_assessment_unit_of_analysis_error')
+
+rob_plot$Risk <- fct_recode(rob_plot$Risk, 
+                            "High RoB" = 'high RoB', 
+                            "Low RoB" = 'low RoB',
+                            "Unclear RoB" = 'unclear RoB')
+
+
+rob_plot %>% 
+  ggplot(aes(x = variable, fill = Risk)) +
+  geom_bar(aes(y = (after_stat(count)/sum(after_stat(count)))*1000)) +
+  legend_bottom() +
+  coord_flip() + 
+  labs(title = "Risk of Bias (RoB) assessment of studies meeting inclusion criteria", x = 'Risk of Bias Assessment Category', y = '% of Studies') +
+  theme(plot.title = element_text(size=14, face="bold"))
+
+```
+
+
+## Power analysis of individual studies to determine whether my meta-analysis has power to detect the pooled effect size
+
+Using https://journals.sagepub.com/doi/10.1177/25152459221147260
+
+Unlikely to be possible because I don't have one effect size per study so probably not compatible with metameta package. Have emailed author. Discuss this as a limitation 
+
+
+# Getting info for potential moderator variables 
+## Sex of animals 
+
+```{r - sex of animals contributing to effect sizes }
+sex_of_cohorts_effect <- SMD.g %>% 
+  select(effect_id, sex_of_animals) %>% 
+  group_by(sex_of_animals) %>% 
+  tally()
+
+sex_of_cohorts_effect 
+```
+
+```{r - sex of animals within studies}
+sex_of_cohorts_study <- SMD.g %>% 
+  select(study_id_str, sex_of_animals) %>% 
+  distinct() 
+  
+sex_of_cohorts_study2 <- sex_of_cohorts_study %>% 
+  group_by(study_id_str) %>% 
+  summarise(N = n()) 
+
+sex_of_cohorts_study <- sex_of_cohorts_study %>% 
+  left_join(sex_of_cohorts_study2) %>% 
+  mutate(cohorts_in_study = case_when(N == '1' ~ paste(sex_of_animals), 
+                                      N == '2' ~ 'male and female independent cohorts')) %>% 
+  select(-N) %>% 
+  group_by(cohorts_in_study) %>% 
+  tally()
+
+```
+### Results 
+36 effect sizes were from female only cohorts
+137 effect sizes were from male only cohorts 
+74 effect sizes were from mixed sex cohorts 
+
+5 studies used only female cohorts 
+24 studies used only male cohorts 
+12 studies assessed males and females in independent cohorts 
+13 studies assessed males and females within the same cohort 
+
+## Species of animals 
+
+```{r - species of animals}
+species_of_animals_effect <- SMD.g %>% 
+  select(effect_id, species_of_animal) %>% 
+  group_by(species_of_animal) %>% 
+  tally()
+```
+### Results 
+94 effect sizes from mice 
+153 effect sizes from rats 
+
+
+## Strain of animals
+```{r - strain of animals}
+strain_of_animals_effect <- SMD.g %>% 
+  select(effect_id, strain) %>% 
+  group_by(strain) %>% 
+  tally()
+```
+### Results 
+4 effect sizes from BALB/c
+37 effect sizes from C57BL/6
+20 effect sizes from C57BL/6J
+29 effect sizes from C57BL/6N
+4 effect sizes from ddY
+41 effect sizes from long-evans 
+75 effect sizes from sprague-dawley
+31 effect sizes from wistar
+6 effect sizes from wistar-hannover 
+
+
+## PolyI:C Dose administered 
+```{r - polyI:C dose administered}
+polyIC_effect <- SMD.g %>% 
+  select(effect_id, poly_I_C_daily_dose_mg_kg) %>% 
+  group_by(poly_I_C_daily_dose_mg_kg) %>% 
+  tally()
+```
+### Results 
+3 effect sizes from NA
+3 effect sizes from 0.75mg/kg
+7 effect sizes from 12mg/kg
+12 effect sizes from 2mg/kg
+96 effect sizes from 4mg/kg
+94 effect sizes from 5mg/kg
+3 effect sizes from 8mg/kg
+15 effect sizes from 10mg/kg
+14 effects zies from 30mg/kg
+
+
+## Gestational day of polyI:C administration 
+```{r - first GD administration}
+GD_administration_effect <- SMD.g %>% 
+  select(effect_id, GD_first_administration) %>% 
+  group_by(GD_first_administration) %>% 
+  tally()
+```
+### Results 
+3 effect sizes from NA 
+69 effect sizes from GD9
+3 effect sizes from GD9.5
+3 effect sizes from GD10
+11 effect sizes from GD12
+1 effect size from GD13
+12 effect sizes from GD14
+132 effect sizes from GD15
+9 effect sizes from GD17
+1 effect size from GD17.5
+3 effects sizes from GD18
+
+## Route of polyI:C administration 
+```{r - administration route}
+administration_route_effect <- SMD.g %>% 
+  select(effect_id, administration_route) %>% 
+  group_by(administration_route) %>% 
+  tally()
+```
+### Results 
+58 effect sizes from ip
+183 effect sizes from iv 
+6 effect sizes from sc
+
+
+## Postnatal day of %PPI testing 
+```{r - PND PPI testing}
+PND_PPI_effect <- SMD.g %>% 
+  select(effect_id, time) %>% 
+  group_by(time) %>% 
+  tally()
+```
+### Results
+3 at NA 
+5 at PND 30
+4 at PND 34
+14 at PND35
+4 at PND36
+6 at PND40
+3 at PND 43
+2 at PND50
+6 at PND51
+40 at PND56
+22 at PND60
+44 at PND70
+1 at PND71
+1 at PND72
+1 at PND73
+1 at PND74
+2 at PND75
+8 at PND76
+2 at PND77
+2 at PND78
+1 at PND79
+1 at PND80
+1 at PND81
+22 at PND84
+16 at PND90
+16 at PND91
+1 at PND92
+1 at PND93
+1 at PND94
+2 at PND97
+2 at PND98
+3 at PND100
+3 at PND112
+4 at PND119
+2 at PND180
+
+## Developmental stage at %PPI testing 
+```{r - dev. stage PPI testing}
+stage_PPI_effect <- SMD.g %>% 
+  select(effect_id, developmental_stage_PPI) %>% 
+  group_by(developmental_stage_PPI) %>% 
+  tally()
+```
+### Results 
+3 effect sizes at NA
+27 effect sizes from juvenile offspring 
+26 effect sizes from adoelscent offspring 
+191 effect sizes from adult offspring 
+
+
+# Qualititaive description of variables not being invetigated as potential moderator variables 
+
+
+
+
+
+
+
+
+
+
+
+## Put some nice alluvium plots in here (meta-analysis_non.ind)
+
+
+
+
+
+
