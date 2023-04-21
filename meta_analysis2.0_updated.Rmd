@@ -41,6 +41,9 @@ pacman::p_load(devtools, tidyverse, metafor, patchwork, R.rsp, emmeans)
 devtools::install_github("daniel1noble/orchaRd", force = TRUE)
 devtools::install_github('cttobin/ggthemr')
 
+devtools::install_github("dsquintana/metameta")
+library(metameta)
+
 SMD.g <- read.csv('meta.csv')
 ```
 
@@ -50,7 +53,7 @@ SMD.g <- read.csv('meta.csv')
 
 Hedges g to account for small sample sizes (default for SMD when using the escalc() function) - Hedge’s g (statistically corrects for variance that may be introduced when sample sizes are small (Larry V. Hedges 1981)). Of note, I use the “true” number of control animals (c.n), where the sample size of the control group is divided by the number of treatment groups it serves (if one control group serves multiple treatment groups), to avoid control groups contributing multiple times to the calculation of an effect size (Vesterinen et al., 2014). 
 
-```{r - calculate effect sizes - dont need to run this chunk because SMD already in meta.csv dataset}
+```{r - calculate effect sizes - don't need to run this chunk because SMD already in meta.csv dataset}
 SMD <- escalc("SMD",                          
                        m1i = c.mean,        
                        n1i = c.n, 
@@ -200,7 +203,7 @@ Level 4: the study_id (used to account for between-study random effect and uses 
 
 ## 2. Effect sizes from same cohorts, same outcome measure, different time point 
 
-```{r - introduce same_coh_same_PPI_param_diff_time as a random effect to ml.study.effect-1}
+```{r - introduce same_coh_same_PPI_param_diff_time as a random effect to ml.study.effect}
 ml_study.effect.outcome.time <- rma.mv(yi = SMD, V = SMDV, random = ~1 | study_id_str / same_cohort_diff_PPI_param / same_coh_same_PPI_param_diff_time / effect_id, 
                                        data = SMD.g, method = 'ML')
 summary(ml_study.effect.outcome.time)
@@ -232,7 +235,7 @@ Level 4: the same_cohort_diff_PPI_param variable (groups effect sizes from the s
 Level 5: the study_id (used to account for between-study random effect and uses corresponding variance component (σ between) to capture study-specific heterogeneity)
 
 # Change method back to REML for improved model and assess output 
-```{r - introduce same_coh_same_PPI_param_diff_time as a random effect to ml.study.effect 2}
+```{r - introduce same_coh_same_PPI_param_diff_time as a random effect to ml.study.effect}
 ml_study.effect.outcome.time.re <- rma.mv(yi = SMD, V = SMDV, random = ~1 | study_id_str / same_cohort_diff_PPI_param / same_coh_same_PPI_param_diff_time / effect_id, 
                                        data = SMD.g, method = 'REML')
 summary(ml_study.effect.outcome.time.re)
@@ -412,13 +415,119 @@ PND of offspring at time of PPI testing as a fixed effect variable explains 4.06
 
 Using https://journals.sagepub.com/doi/10.1177/25152459221147260 
 
-## Create necessary dataset (highest variance effect size)
+Package is designed to work with non-independent effect sizes (i.e. one effect size per study), however I got in touch with the author of the package and one of the workarounds he suggested was performing a power analysis using the effect size with the highest variance from each study, and then repeating using the effect size with the lowest variance, and then checking that there the values were similar for both conditions (he predicted that the power would be relatively stable)
+
+## Power from highest variance effect size for each study
 
 ```{r - create dataset for use with metameta: study_id_str, SMD and SD: select effect size with highest variance for each study (a priori decision) - will repeat with lowest for sensitivity analysis} 
+SMD.g.highest_var <- SMD.g %>% 
+  group_by(study_id_str) %>% 
+  top_n(1, SMDV) %>% 
+  select(study_id_str, SMD, SMDV) %>% 
+  mutate(sei = sqrt(SMDV), 
+         yi = SMD) %>% 
+  select(-SMDV) 
 
-
+power_h <- mapower_se(SMD.g.highest_var, observed_es = 0.5602, name = 'psychosis MA')
+power_h_res <- power_h$dat
 
 ```
+### Results 
+This analysis suggests that none of the studies included within this meta-analysis had the power to detect the effect sizes they reported with 80% confidence 
+
+## Power from lowest variance effect size for each study 
+
+```{r - create dataset for use with metameta: study_id_str, SMD and SD: select effect size with lowest variance for each study (a priori decision) } 
+SMD.g.lowest_var <- SMD.g %>% 
+  group_by(study_id_str) %>% 
+  top_n(-1, SMDV) %>%  
+  select(study_id_str, SMD, SMDV) %>% 
+  mutate(sei = sqrt(SMDV), 
+         yi = SMD) %>% 
+  select(-SMDV) 
+
+power_l <- mapower_se(SMD.g.lowest_var, observed_es = 0.5602, name = 'psychosis MA')
+power_l_res <- power_l$dat
+```
+### Results 
+This analysis also suggests that none of the studies included within this meta-analysis had the power to detect the effect sizes they reported with 80% confidence (very little difference in power estimates)
+
+**Sensitivity analysis?**
+
+```{r - dataset with power to detect effect sizes with lowest and highest variances for each study (sensitivity analysis)}
+power_res <- power_h_res %>%
+  select(study_id_str, power_es_observed) %>% 
+  rename(power_highest_var = power_es_observed) %>% 
+  left_join(power_l_res) %>% 
+  select(study_id_str, power_highest_var, power_es_observed) %>% 
+  rename(power_lowest_var = power_es_observed) %>% 
+  mutate(discrepancy = power_lowest_var - power_highest_var)
+
+```
+
+
+## Power analysis for my study specifically (again using metameta)
+
+need to find average sample size for each study (a priori decision to do this by calculating the average of the smallest sample size (contributing to an effect size) for each study i.e. be conservative)
+
+```{r - average sample size for studies}
+ss <- SMD.g %>% 
+  select(study_id_str, disease_cohort_str, control_cohort_str, d.n, c.n) %>% 
+  distinct() 
+
+disease_ss <- ss %>% 
+  select(study_id_str, disease_cohort_str, d.n) %>% 
+  distinct() %>% 
+  group_by(study_id_str) %>% 
+  summarise(total_disease = sum(d.n)) 
+
+control_ss <- ss %>% 
+  select(study_id_str, control_cohort_str, c.n) %>% 
+  distinct() %>% 
+  group_by(study_id_str) %>% summarise(total_control = sum(c.n))
+
+disease_ss_con <- ss %>% select(study_id_str, d.n) %>% group_by(study_id_str) %>% top_n(-1, d.n)
+mean(disease_ss_con$d.n) #14.54
+control_ss_con <- ss %>% select(study_id_str, c.n) %>% group_by(study_id_str) %>% top_n(-1, c.n)
+mean(control_ss_con$c.n) #13.51
+#mean conservative size of cohorts contributing to each effect size = 14.0
+```
+Average sample size = 44.2 
+
+```{r - power analysis and plot}
+library(metapower)
+library(ggplot2)
+library(cowplot)
+
+power <- mpower(effect_size = 0.5602,
+                 study_size = 14,
+                 k = 48 ,
+                 i2 = 0.768,
+                 es_type = "d")
+summary(power)
+
+power_plot <- plot_mpower(power)
+power_plot <- power_plot + ggtitle("Power analysis for a meta-analysis of 48 studies with a mean total sample size of 14 (per effect size estimate) \nto detect pooled effect size of 0.5602 assuming 76.8% heterogeneity")
+power_plot
+
+```
+### Results
+My meta-analysis is adequately powered to detect the estimated pooled effect size and for that level of heterogeneity (92.7% power). Therefore, this meta-analysis is an example of how although individual included studies may not have sufficient statistical power to reliably detect a wide range of effect sizes, the synthesis of several of these studies into a summary effect size can increase statistical power. 
+
+
+# Test whether polyI:C administration increases heterogeneity in animals compared to control (lnCVR)
+
+
+
+
+# Test for publication bias 
+
+## Extended Egger's regression (small study effect)
+
+
+## Time lag bias 
+
+
 
 
 
